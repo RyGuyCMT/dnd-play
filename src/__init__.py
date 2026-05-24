@@ -1,0 +1,1 @@
+"""D&D Play — thin multiplayer server for D&D campaigns."""

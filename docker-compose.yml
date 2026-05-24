@@ -1,0 +1,15 @@
+services:
+  dnd-server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - dnd-data:/data
+    environment:
+      - STORAGE_MODE=local
+      - DATA_PATH=/data
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+    restart: unless-stopped
+
+volumes:
+  dnd-data:
