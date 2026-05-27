@@ -36,10 +36,10 @@ class Message:
 
     @classmethod
     def send(cls, campaign_id: str, sender_name: str,
-             recipient_names: list[str], content: str,
-             scope: RecipientScope = RecipientScope.SINGLE,
-             session_number: Optional[int] = None,
-             is_system: bool = False) -> "Message":
+            recipient_names: list[str], content: str,
+            scope: RecipientScope = RecipientScope.SINGLE,
+            session_number: Optional[int] = None,
+            is_system: bool = False) -> "Message":
         return cls(
             id=uuid.uuid4().hex[:12],
             campaign_id=campaign_id,
@@ -51,3 +51,8 @@ class Message:
             sent_at=datetime.utcnow().isoformat(),
             session_number=session_number,
         )
+
+    def __post_init__(self) -> None:
+        # Handle enum loaded from JSON as string
+        if isinstance(self.scope, str):
+            self.scope = RecipientScope[self.scope]

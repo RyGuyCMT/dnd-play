@@ -2,6 +2,7 @@
 
 from .base import (
     LocalStorageAdapter,
+    RegistryService,
     Repository,
     StorageAdapter,
     dataclass_to_dict,
@@ -11,6 +12,7 @@ from .base import (
 
 __all__ = [
     "LocalStorageAdapter",
+    "RegistryService",
     "Repository",
     "StorageAdapter",
     "dataclass_to_dict",

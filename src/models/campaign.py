@@ -42,10 +42,30 @@ class Campaign:
     created_at: str = ""
     updated_at: str = ""
 
-    def model_post_init(self, __context) -> None:
+    def __post_init__(self) -> None:
         # Handle enum loaded from JSON as string
         if isinstance(self.status, str):
+            from models.campaign import CampaignStatus
             self.status = CampaignStatus[self.status]
+        # Rehydrate GameSession objects from plain dicts (asdict strips dataclass type)
+        if isinstance(self.current_session, dict):
+            from models.session import GameSession
+            self.current_session = GameSession(**self.current_session)
+        if self.sessions:
+            from models.session import GameSession
+            self.sessions = {
+                num: (GameSession(**sess) if isinstance(sess, dict) else sess)
+                for num, sess in self.sessions.items()
+            }
+        # Rehydrate Character objects from plain dicts (dataclass_to_dict flattens them)
+        from models.character import Character
+        for name, char_data in list(self.characters.items()):
+            if isinstance(char_data, dict):
+                self.characters[name] = Character(**char_data)
+
+    def model_post_init(self, __context) -> None:
+        # Called by Pydantic model_validate; delegate to __post_init__ logic
+        self.__post_init__()
 
     @classmethod
     def new(cls, title: str, dm_token: str, elevator_pitch: str = "",

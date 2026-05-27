@@ -87,9 +87,17 @@ class StorageAdapter(ABC):
     @abstractmethod
     def load_snapshot(self, key: str) -> dict | None: ...
 
-
     @abstractmethod
     def campaign_exists(self, campaign_id: str) -> bool: ...
+
+    # ── Registry ────────────────────────────────────────────────────────────────
+
+    @abstractmethod
+    def save_registry(self, registry: dict) -> None: ...
+    @abstractmethod
+    def load_registry(self, campaign_id: str) -> dict | None: ...
+    @abstractmethod
+    def list_registries(self) -> list[dict]: ...
 
 
 # ─── Local JSON Storage ────────────────────────────────────────────────────────
@@ -161,15 +169,66 @@ class LocalStorageAdapter(StorageAdapter):
 
     def save_snapshot(self, key: str, data: dict) -> None:
         snap_dir = self._root / "snapshots"
-        snap_dir.mkdir(exist_ok=True)
-        path = snap_dir / f"{key}.json"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        # Keys may be bare names ("my_snap") or relative paths
+        # ("campaigns/c1/world_state"). Normalise so we never double-suffix.
+        safe_key = key.removesuffix(".json")
+        path = snap_dir / f"{safe_key}.json"
         path.write_text(to_json(data, pretty=True))
 
     def load_snapshot(self, key: str) -> dict | None:
-        path = self._root / "snapshots" / f"{key}.json"
+        path = self._root / "snapshots" / f"{key.removesuffix('.json')}.json"
         if not path.exists():
             return None
         return from_json(path.read_text(), dict)
+
+    # ── Registry ────────────────────────────────────────────────────────────────
+
+    def _registry_path(self, campaign_id: str) -> Path:
+        return self._root / "registries" / f"{campaign_id}.json"
+
+    def _registry_root(self) -> Path:
+        r = self._root / "registries"
+        r.mkdir(parents=True, exist_ok=True)
+        return r
+
+    def save_registry(self, registry: dict) -> None:
+        path = self._registry_path(registry["campaign_id"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(to_json(registry, pretty=True))
+
+    def load_registry(self, campaign_id: str) -> dict | None:
+        path = self._registry_path(campaign_id)
+        if not path.exists():
+            return None
+        return from_json(path.read_text(), dict)
+
+    def list_registries(self) -> list[dict]:
+        out = []
+        for p in self._registry_root().glob("*.json"):
+            try:
+                r = from_json(p.read_text(), dict)
+                out.append({
+                    "campaign_id": r.get("campaign_id"),
+                    "campaign_path": r.get("campaign_path"),
+                    "world_state_path": r.get("world_state_path"),
+                    "character_count": len(r.get("characters", [])),
+                    "session_zero_finalized_at": r.get("session_zero_finalized_at", ""),
+                })
+            except Exception:
+                pass
+        return out
+
+    # ── Load arbitrary path (for registry-driven loading) ───────────────────────
+
+    def load_file(self, path: str) -> dict | None:
+        """Load a JSON file given a relative path from _root or an absolute path."""
+        p = Path(path)
+        if not p.is_absolute():
+            p = self._root / p
+        if not p.exists():
+            return None
+        return from_json(p.read_text(), dict)
 
 
 # ─── Repository ────────────────────────────────────────────────────────────────
@@ -177,6 +236,52 @@ class LocalStorageAdapter(StorageAdapter):
 from models.campaign import Campaign
 from models.message import Message
 from models.session import GameSession
+from models.registry import CampaignRegistry, CharacterPointer
+
+
+class RegistryService:
+    """High-level registry operations — save, load, resolve full campaign state."""
+
+    def __init__(self, adapter: StorageAdapter) -> None:
+        self._adapter = adapter
+
+    def save_registry(self, registry: CampaignRegistry) -> None:
+        self._adapter.save_registry(dataclass_to_dict(registry))
+
+    def load_registry(self, campaign_id: str) -> CampaignRegistry | None:
+        data = self._adapter.load_registry(campaign_id)
+        if data is None:
+            return None
+        return from_json(to_json(data), CampaignRegistry)
+
+    def list_registries(self) -> list[dict]:
+        return self._adapter.list_registries()
+
+    def load_from_registry(self, campaign_id: str) -> tuple[Campaign, dict, list[dict]] | None:
+        """Resolve all paths from the registry and load the full campaign state.
+
+        Returns (campaign, world_state, character_sheets) or None if registry missing.
+        Paths are resolved relative to _root, or as absolute URLs.
+
+        Character sheets that can't be loaded (missing files) are skipped silently —
+        the DM can add them later from the character creation flow.
+        """
+        registry = self.load_registry(campaign_id)
+        if registry is None:
+            return None
+
+        campaign_data = self._adapter.load_file(registry.campaign_path)
+        if campaign_data is None:
+            return None
+
+        world_data = self._adapter.load_file(registry.world_state_path)
+        character_sheets = [
+            cs for cs in (self._adapter.load_file(cp.path) for cp in registry.characters)
+            if cs is not None
+        ]
+
+        campaign = from_json(to_json(campaign_data), Campaign)
+        return campaign, world_data or {}, character_sheets
 
 
 class Repository:

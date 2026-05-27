@@ -10,9 +10,9 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from config import settings
 
-from config import settings
 from persistence.base import LocalStorageAdapter, Repository
 from websocket import Client, ws_manager
+from models.campaign import Campaign
 
 
 logger = logging.getLogger(__name__)
@@ -35,17 +35,22 @@ async def websocket_endpoint(
     """
     WebSocket endpoint for real-time messaging.
 
+    The campaign must already be loaded into memory via
+    GET /registries/{campaign_id}/load before this connection is attempted.
+
     Connect as DM:
-      ws://host/campaigns/<id>/ws?token=<dm_token>&dm_token=<dm_token>
+      ws://host/campaigns/<id>/ws?token=***&dm_token=<dm_token>
 
     Connect as player:
-      ws://host/campaigns/<id>/ws?token=<character_token>&character_name=<name>
+      ws://host/campaigns/<id>/ws?token=***&character_name=<name>
     """
-    repo = Repository(LocalStorageAdapter(settings.data_path))
-    campaign = repo.load_campaign(campaign_id)
-
+    campaign = ws_manager.get_campaign(campaign_id)
     if campaign is None:
-        await websocket.close(code=4004, reason="Campaign not found")
+        await websocket.close(code=4004, reason="Campaign not loaded — call GET /registries/{id}/load first")
+        return
+
+    if not isinstance(campaign, Campaign):
+        await websocket.close(code=5000, reason="Campaign state corrupt")
         return
 
     # Verify token
@@ -89,17 +94,15 @@ async def websocket_endpoint(
             if msg.get("type") == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
             elif msg.get("type") == "message":
-                await _handle_ws_message(char_name, is_dm, campaign_id, msg, repo)
+                await _handle_ws_message(client, campaign_id, msg)
     except WebSocketDisconnect:
         ws_manager.disconnect(client)
 
 
 async def _handle_ws_message(
-    character_name: str | None,
-    is_dm: bool,
+    sender: Client,
     campaign_id: str,
     msg: dict,
-    repo: Repository,
 ):
     from models.message import RecipientScope
     from services.messages import send_message
@@ -116,10 +119,14 @@ async def _handle_ws_message(
 
     recipient_names = msg.get("recipient_names", [])
 
-    if is_dm:
+    if sender.is_dm:
         sender_name = "DM"
     else:
-        sender_name = character_name or "DM"
+        sender_name = sender.character_name or "DM"
+
+    # Load repo from the in-memory campaign for message persistence
+    from persistence.base import Repository
+    repo = Repository(LocalStorageAdapter(settings.data_path))
 
     message = send_message(
         repo=repo,
@@ -129,4 +136,4 @@ async def _handle_ws_message(
         recipient_names=recipient_names,
         content=content,
     )
-    await ws_manager.broadcast_message(campaign_id, message)
+    await ws_manager.broadcast_message(campaign_id, message, sender=sender)

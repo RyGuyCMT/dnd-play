@@ -18,6 +18,11 @@ class GameSession:
     ended_at: Optional[str] = None
     arc_notes: str = ""
 
+    def __post_init__(self) -> None:
+        # Handle list->set conversion for fields restored from JSON (asdict converts set→list)
+        if isinstance(self.connected_character_names, (list, set)):
+            self.connected_character_names = set(self.connected_character_names)
+
     @classmethod
     def start(cls, campaign_id: str, number: int) -> "GameSession":
         return cls(

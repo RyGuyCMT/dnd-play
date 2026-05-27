@@ -9,9 +9,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from persistence.base import LocalStorageAdapter, Repository
+from persistence.base import LocalStorageAdapter, RegistryService, Repository
 from api import (campaigns_router, sessions_router,
-                          characters_router, messages_router)
+                          characters_router, messages_router, registries_router)
 from api import websocket_ws
 from websocket import ws_manager
 
@@ -23,16 +23,18 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: init repository
+    # Startup: init repository + registry service
     adapter = LocalStorageAdapter(data_path=settings.data_path)
     repo = Repository(adapter)
+    registry_service = RegistryService(adapter)
 
-    # Inject repo into all route modules
-    from api import campaigns, sessions, characters, messages
+    # Inject into all route modules
+    from api import campaigns, sessions, characters, messages, registries
     campaigns.set_repo(repo)
     sessions.set_repo(repo)
     characters.set_repo(repo)
     messages.set_repo(repo)
+    registries.set_registry_service(registry_service)
 
     logger.info(f"D&D Play server started — data at {settings.data_path}")
     yield
@@ -59,6 +61,7 @@ app.include_router(campaigns_router)
 app.include_router(sessions_router)
 app.include_router(characters_router)
 app.include_router(messages_router)
+app.include_router(registries_router)
 
 # WebSocket
 app.include_router(websocket_ws.router)
