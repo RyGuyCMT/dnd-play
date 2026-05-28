@@ -9,7 +9,9 @@ from models.game_loop import (
     ExplorationMode,
     GameLoop,
     GameStateType,
+    TransitionGameLoop,
 )
+from models.initiative import Initiative, InitiativeParticipant
 from models.message import Message, RecipientScope
 from models.registry import CampaignRegistry, CharacterPointer
 from models.session import GameSession
@@ -25,8 +27,11 @@ __all__ = [
     "DowntimeMode",
     "ExplorationMode",
     "GameLoop",
-    "GameStateType",
     "GameSession",
+    "GameStateType",
+    "Initiative",
+    "InitiativeParticipant",
     "Message",
     "RecipientScope",
+    "TransitionGameLoop",
 ]

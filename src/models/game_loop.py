@@ -353,6 +353,7 @@ class GameLoop:
             "distance_feet":       self.distance_feet,
             "parent_state_type":   self.parent_state_type.name if self.parent_state_type else None,
             "parent_mode":         self.parent_mode,
+            "actions_taken":       list(self.actions_taken),  # set → list for JSON
         }
 
     @classmethod
@@ -373,4 +374,5 @@ class GameLoop:
         parent_st = data.get("parent_state_type")
         gl.parent_state_type = GameStateType[parent_st] if parent_st else None
         gl.parent_mode = data.get("parent_mode", "")
+        gl.actions_taken = set(data.get("actions_taken", []))
         return gl

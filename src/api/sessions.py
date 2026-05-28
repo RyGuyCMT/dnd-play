@@ -9,6 +9,7 @@ from api.deps import AuthContext, require_auth, require_dm
 from models.message import Message, RecipientScope
 from models.session import GameSession
 from models.game_loop import GameStateType, TransitionGameLoop
+from websocket import ws_manager
 from persistence.base import Repository, LocalStorageAdapter
 
 
@@ -217,6 +218,9 @@ def transition_game_loop(
 
     get_repo().save_campaign(campaign)
 
+    # ── Broadcast game-loop update via WebSocket (after response) ────────────
+    _broadcast_game_loop(campaign_id, gl)
+
     return {
         "state_type":        gl.state_type.name,
         "mode":              gl.mode,
@@ -226,6 +230,41 @@ def transition_game_loop(
         "surprise":          gl.surprise,
         "parent_state_type": gl.parent_state_type.name if gl.parent_state_type else None,
     }
+
+
+def _broadcast_game_loop(campaign_id: str, gl: "GameLoop") -> None:
+    """Fire-and-forget WS broadcast after the HTTP response is sent.
+
+    Uses asyncio.run() in a background thread so there is no latency
+    cost to the DM's request.  Each call gets its own event loop.
+    """
+    import asyncio
+    from threading import Thread
+
+    def _run():
+        asyncio.run(_async_broadcast_game_loop(campaign_id, gl))
+
+    t = Thread(target=_run, daemon=True)
+    t.start()
+
+
+async def _async_broadcast_game_loop(campaign_id: str, gl: "GameLoop") -> None:
+    """Async inner — may be called after the loop is already past suspension."""
+    try:
+        await ws_manager.broadcast_game_loop_update(
+            campaign_id=campaign_id,
+            state_type=gl.state_type.name,
+            mode=gl.mode,
+            round_num=gl.round,
+            turn=gl.turn,
+            active_participant=gl.active_participant,
+            initiative_order=gl.initiative_order,
+            allowed_actions=gl.allowed_actions,
+            broadcast_scope=gl.broadcast_scope,
+        )
+    except Exception:
+        # Never let a broadcast failure affect the HTTP response
+        pass
 
 
 @router.post("/{session_number}/game-loop/advance-turn")
@@ -246,6 +285,7 @@ def advance_turn(
     gl = session.game_loop
     gl.advance_turn()
     get_repo().save_campaign(campaign)
+    _broadcast_game_loop(campaign_id, gl)
 
     return {
         "active_participant": gl.active_participant,
@@ -272,6 +312,7 @@ def advance_round(
     gl = session.game_loop
     gl.advance_round()
     get_repo().save_campaign(campaign)
+    _broadcast_game_loop(campaign_id, gl)
 
     return {
         "round":         gl.round,
@@ -280,7 +321,7 @@ def advance_round(
     }
 
 
-@router.post("/characters/{character_name}/connect")
+@router.post("/{session_number}/game-loop/combat/start")
 def connect_character(campaign_id: str, character_name: str,
                       ctx: AuthContext = Depends(require_auth)):
     """Mark a character as connected to the current session."""

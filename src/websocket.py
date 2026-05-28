@@ -130,6 +130,57 @@ class WSManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def broadcast_game_loop_update(
+        self,
+        campaign_id: str,
+        state_type: str,
+        mode: str,
+        round_num: int,
+        turn: int,
+        active_participant: str,
+        initiative_order: list[str],
+        allowed_actions: list[str],
+        broadcast_scope: str,
+    ) -> None:
+        """Push a game-loop state update to all connected clients in a campaign."""
+        room = self._rooms.get(campaign_id, [])
+
+        # Filter recipients based on broadcast_scope:
+        #   ACTIVE  → only the active participant
+        #   ALL    → everyone
+        #   DM     → only the DM
+        #   NONE   → no broadcast (state machine using this for side-effects only)
+        targets: list[Client] = []
+        for client in room:
+            if broadcast_scope == "ALL":
+                targets.append(client)
+            elif broadcast_scope == "DM" and client.is_dm:
+                targets.append(client)
+            elif broadcast_scope == "ACTIVE" and client.character_name == active_participant:
+                targets.append(client)
+            elif broadcast_scope == "ACTIVE" and client.is_dm:
+                # DM always sees active-participant broadcasts
+                targets.append(client)
+
+        if not targets:
+            return
+
+        payload = json.dumps({
+            "type": "game_loop_update",
+            "payload": {
+                "state_type":      state_type,
+                "mode":            mode,
+                "round":           round_num,
+                "turn":            turn,
+                "active_participant": active_participant,
+                "initiative_order": initiative_order,
+                "allowed_actions": allowed_actions,
+                "broadcast_scope": broadcast_scope,
+            }
+        })
+        tasks = [client.websocket.send_text(payload) for client in targets]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     # ── Query ─────────────────────────────────────────────────────────────────
 
     def connected_count(self, campaign_id: str) -> int:
