@@ -10,6 +10,12 @@ from typing import Optional
 from .session import GameSession
 
 
+class CampaignPhase(Enum):
+    SETUP  = "setup"
+    REVIEW = "review"
+    ACTIVE = "active"
+
+
 class CampaignStatus(Enum):
     DRAFT     = auto()
     ACTIVE    = auto()
@@ -31,6 +37,10 @@ class Campaign:
     # Characters are registered (invited) here; connected players live in session
     characters: dict[str, "Character"] = field(default_factory=dict)
 
+    # Session Zero state — character review status
+    # Only used during SETUP/REVIEW phase; empty dict means all approved
+    pending_characters: dict[str, str] = field(default_factory=dict)
+
     # Game sessions
     current_session: Optional[GameSession] = None
     sessions: dict[int, GameSession] = field(default_factory=dict)   # number → session
@@ -38,15 +48,28 @@ class Campaign:
     # Status
     status: CampaignStatus = CampaignStatus.DRAFT
 
+    # Session Zero phase
+    phase: CampaignPhase = CampaignPhase.SETUP
+
     # Timestamps
     created_at: str = ""
     updated_at: str = ""
 
     def __post_init__(self) -> None:
-        # Handle enum loaded from JSON as string
+        # Rehydrate enums from string representations (stored as .name, loaded by name or value)
+        from models.campaign import CampaignPhase, CampaignStatus
+
         if isinstance(self.status, str):
-            from models.campaign import CampaignStatus
             self.status = CampaignStatus[self.status]
+
+        # Rehydrate phase from string (PydanticEncoder stores .name, e.g. "SETUP")
+        if isinstance(self.phase, str):
+            try:
+                self.phase = CampaignPhase[self.phase]  # lookup by name first
+            except KeyError:
+                self.phase = CampaignPhase(self.phase)  # fallback to value lookup
+        elif not isinstance(self.phase, CampaignPhase):
+            self.phase = CampaignPhase(self.phase.value if hasattr(self.phase, 'value') else str(self.phase))
         # Rehydrate GameSession objects from plain dicts (asdict strips dataclass type)
         if isinstance(self.current_session, dict):
             from models.session import GameSession
@@ -57,6 +80,24 @@ class Campaign:
                 num: (GameSession(**sess) if isinstance(sess, dict) else sess)
                 for num, sess in self.sessions.items()
             }
+            # game_loop inside each GameSession may still be a dict (asdict flattens it)
+            # — rehydrate it after the GameSession itself is reconstructed.
+            # Also handles the case where sessions dict was NOT rehydrated
+            # (already GameSession objects) but have stale dict game_loop.
+            from models.game_loop import GameLoop
+            for session in self.sessions.values():
+                if isinstance(session.game_loop, dict):
+                    session.game_loop = GameLoop.from_dict(session.game_loop)
+        # Rehydrate game_loop for current_session — either rehydrated above
+        # or still a dict (e.g. if sessions dict was already objects and the
+        # sessions rehydration block was skipped)
+        if self.current_session is not None:
+            from models.game_loop import GameLoop
+            if isinstance(self.current_session, dict):
+                from models.session import GameSession
+                self.current_session = GameSession(**self.current_session)
+            if isinstance(self.current_session.game_loop, dict):
+                self.current_session.game_loop = GameLoop.from_dict(self.current_session.game_loop)
         # Rehydrate Character objects from plain dicts (dataclass_to_dict flattens them)
         from models.character import Character
         for name, char_data in list(self.characters.items()):
@@ -82,6 +123,7 @@ class Campaign:
             current_session=None,
             sessions={},
             status=CampaignStatus.DRAFT,
+            phase=CampaignPhase.SETUP,
             created_at=now,
             updated_at=now,
         )

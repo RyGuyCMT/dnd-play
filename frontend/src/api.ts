@@ -107,6 +107,12 @@ export const api_get_messages = (campaign_id: string, token: string) =>
     headers: { Authorization: `Bearer ${token}` },
   });
 
+// Registries
+export const api_list_registries = () => api("/registries");
+
+export const api_load_from_registry = (campaign_id: string) =>
+  api(`/registries/${campaign_id}/load`);
+
 // ── WebSocket ────────────────────────────────────────────────────────────────
 
 type WsHandler = (msg: Message | { type: string; payload: any }) => void;

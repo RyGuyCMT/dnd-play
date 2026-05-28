@@ -39,6 +39,7 @@ class PydanticEncoder(json.JSONEncoder):
         if isinstance(obj, set):
             return sorted(list(obj), key=str)
         if isinstance(obj, Enum):
+            # Store enum name (SETUP, DRAFT) not value (setup, draft)
             return obj.name
         return super().default(obj)
 

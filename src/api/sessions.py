@@ -8,6 +8,7 @@ from config import settings
 from api.deps import AuthContext, require_auth, require_dm
 from models.message import Message, RecipientScope
 from models.session import GameSession
+from models.game_loop import GameStateType, TransitionGameLoop
 from persistence.base import Repository, LocalStorageAdapter
 
 
@@ -95,6 +96,188 @@ def end_session(campaign_id: str, ctx: AuthContext = Depends(require_auth)):
     get_repo().save_message(msg)
 
     return {"session_number": session.number, "ended_at": session.ended_at}
+
+
+# ─── Game Loop ───────────────────────────────────────────────────────────────
+
+def _load_session(campaign_id: str, session_number: int | str) -> tuple:
+    """Load campaign and resolve the requested session. Raises HTTPException on failure."""
+    campaign = get_repo().load_campaign(campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    # session_number may arrive as str from URL path — try both int and str keys
+    sess_num = int(session_number)
+
+    # Primary: look in sessions dict (key may be int or str after round-trip)
+    session = campaign.sessions.get(sess_num) or campaign.sessions.get(str(sess_num))
+
+    # Fallback: if current_session has the requested session number, use it.
+    # This handles the case where sessions dict wasn't populated but current_session was.
+    if session is None and campaign.current_session is not None:
+        if campaign.current_session.number == sess_num:
+            session = campaign.current_session
+
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Rehydrate stale game_loop dict (e.g. if sessions[n] was not updated after
+    # current_session.game_loop was modified in a prior in-memory session)
+    from models.game_loop import GameLoop
+    if isinstance(session.game_loop, dict):
+        session.game_loop = GameLoop.from_dict(session.game_loop)
+
+    return campaign, session
+
+
+@router.get("/{session_number}/game-loop")
+def get_game_loop(
+    campaign_id: str,
+    session_number: int,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Get the current GameLoop state for a session. DM or player."""
+    if ctx.campaign_id != campaign_id:
+        raise HTTPException(status_code=403, detail="Not your campaign")
+
+    campaign, session = _load_session(campaign_id, session_number)
+    if session.game_loop is None:
+        raise HTTPException(status_code=404, detail="No game loop in this session")
+
+    gl = session.game_loop
+    return {
+        "state_type":        gl.state_type.name,
+        "mode":              gl.mode,
+        "round":             gl.round,
+        "turn":              gl.turn,
+        "active_participant": gl.active_participant,
+        "sequence":          gl.sequence,
+        "infinite":          gl.infinite,
+        "initiative_required": gl.initiative_required,
+        "surprise":          gl.surprise,
+        "broadcast_scope":   gl.broadcast_scope,
+        "allowed_actions":   gl.allowed_actions,
+        "parent_state_type": gl.parent_state_type.name if gl.parent_state_type else None,
+        "parent_mode":       gl.parent_mode,
+    }
+
+
+@router.post("/{session_number}/game-loop")
+def transition_game_loop(
+    campaign_id: str,
+    session_number: int,
+    body: TransitionGameLoop,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """
+    Transition the GameLoop to a new state (DM only).
+
+    Send state_type alone to enter that state with optional mode.
+    Send state_type=RETURN (or omit state_type) to return to parent state.
+    Sending state_type=CLEAR returns to EXPLORATION with all defaults.
+    """
+    require_dm(ctx)
+    if ctx.campaign_id != campaign_id:
+        raise HTTPException(status_code=403, detail="Not your campaign")
+
+    campaign, session = _load_session(campaign_id, session_number)
+    if session.game_loop is None:
+        raise HTTPException(status_code=404, detail="No game loop in this session")
+
+    gl = session.game_loop
+    state_type = body.state_type
+    mode = body.mode or ""
+
+    # Return to parent
+    if state_type is None or state_type.upper() == "RETURN":
+        gl.return_to_parent()
+
+    # Clear and reset to EXPLORATION defaults
+    elif state_type.upper() == "CLEAR":
+        gl.clear_all_overrides()
+        gl.enter(GameStateType.EXPLORATION)
+
+    # Enter new state
+    else:
+        try:
+            new_state = GameStateType[state_type.upper()]
+        except KeyError:
+            valid = [s.name for s in GameStateType]
+            raise HTTPException(status_code=400, detail=f"Invalid state_type. Use: {valid}")
+
+        gl.enter(new_state, mode)
+
+        # Seed initiative if provided (via body)
+        if body.initiative_order is not None:
+            gl.initiative_order = body.initiative_order
+            gl.active_participant = body.initiative_order[0] if body.initiative_order else ""
+
+        # Set surprise flag if provided (via body)
+        if body.surprise is not None:
+            gl.surprise = body.surprise if body.surprise in ("party", "npc") else None
+
+    get_repo().save_campaign(campaign)
+
+    return {
+        "state_type":        gl.state_type.name,
+        "mode":              gl.mode,
+        "round":             gl.round,
+        "turn":              gl.turn,
+        "initiative_order":  gl.initiative_order,
+        "surprise":          gl.surprise,
+        "parent_state_type": gl.parent_state_type.name if gl.parent_state_type else None,
+    }
+
+
+@router.post("/{session_number}/game-loop/advance-turn")
+def advance_turn(
+    campaign_id: str,
+    session_number: int,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Advance to the next participant in initiative order. DM only."""
+    require_dm(ctx)
+    if ctx.campaign_id != campaign_id:
+        raise HTTPException(status_code=403, detail="Not your campaign")
+
+    campaign, session = _load_session(campaign_id, session_number)
+    if session.game_loop is None:
+        raise HTTPException(status_code=404, detail="No game loop in this session")
+
+    gl = session.game_loop
+    gl.advance_turn()
+    get_repo().save_campaign(campaign)
+
+    return {
+        "active_participant": gl.active_participant,
+        "turn":               gl.turn,
+        "round":              gl.round,
+    }
+
+
+@router.post("/{session_number}/game-loop/advance-round")
+def advance_round(
+    campaign_id: str,
+    session_number: int,
+    ctx: AuthContext = Depends(require_auth),
+):
+    """Advance to the next round. DM only."""
+    require_dm(ctx)
+    if ctx.campaign_id != campaign_id:
+        raise HTTPException(status_code=403, detail="Not your campaign")
+
+    campaign, session = _load_session(campaign_id, session_number)
+    if session.game_loop is None:
+        raise HTTPException(status_code=404, detail="No game loop in this session")
+
+    gl = session.game_loop
+    gl.advance_round()
+    get_repo().save_campaign(campaign)
+
+    return {
+        "round":         gl.round,
+        "turn":          gl.turn,
+        "actions_taken": list(gl.actions_taken),
+    }
 
 
 @router.post("/characters/{character_name}/connect")

@@ -11,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from persistence.base import LocalStorageAdapter, RegistryService, Repository
 from api import (campaigns_router, sessions_router,
-                          characters_router, messages_router, registries_router)
+                          characters_router, messages_router, registries_router,
+                          session_zero_router)
 from api import websocket_ws
 from websocket import ws_manager
 
@@ -29,12 +30,13 @@ async def lifespan(app: FastAPI):
     registry_service = RegistryService(adapter)
 
     # Inject into all route modules
-    from api import campaigns, sessions, characters, messages, registries
+    from api import campaigns, sessions, characters, messages, registries, session_zero
     campaigns.set_repo(repo)
     sessions.set_repo(repo)
     characters.set_repo(repo)
     messages.set_repo(repo)
     registries.set_registry_service(registry_service)
+    session_zero.set_repo(repo)
 
     logger.info(f"D&D Play server started — data at {settings.data_path}")
     yield
@@ -61,6 +63,7 @@ app.include_router(campaigns_router)
 app.include_router(sessions_router)
 app.include_router(characters_router)
 app.include_router(messages_router)
+app.include_router(session_zero_router)
 app.include_router(registries_router)
 
 # WebSocket

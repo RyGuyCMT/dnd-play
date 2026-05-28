@@ -10,6 +10,8 @@ import {
   api_get_session,
   api_send_message,
   api_get_messages,
+  api_list_registries,
+  api_load_from_registry,
   ws_connect,
   ws_send,
   type Campaign,
@@ -19,7 +21,7 @@ import {
 
 // ── Views ──────────────────────────────────────────────────────────────────────
 
-type View = "campaigns" | "lobby" | "session";
+type View = "campaigns" | "registries" | "lobby" | "session";
 
 export default function App() {
   const [view, setView] = useState<View>("campaigns");
@@ -75,6 +77,32 @@ export default function App() {
       const c = await api_create_campaign(new_title.trim());
       setCampaign({ id: c.id, title: c.title, status: c.status });
       setDm_token(c.dm_token);
+      setCharacter_name(null);
+      setView("lobby");
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // ── Registry / Session Zero flow ─────────────────────────────────────────
+
+  async function handle_browse_registries() {
+    try {
+      const regs = await api_list_registries();
+      setView("registries");
+    } catch (e: any) { setError(e.message); }
+  }
+
+  async function handle_load_from_registry(campaign_id: string) {
+    try {
+      const data = await api_load_from_registry(campaign_id);
+      setCampaign({
+        id: data.campaign.id,
+        title: data.campaign.title,
+        status: data.campaign.status,
+        dm_token: data.campaign.dm_token,
+        current_session: data.campaign.current_session,
+        character_names: data.campaign.character_names,
+      });
+      setDm_token(data.campaign.dm_token);
       setCharacter_name(null);
       setView("lobby");
     } catch (e: any) { setError(e.message); }
@@ -186,9 +214,15 @@ export default function App() {
         setNew_title={setNew_title}
         on_create={handle_create}
         on_join={handle_join}
+        on_browse_registries={handle_browse_registries}
         dm_token={dm_token}
         character_token={character_token}
         character_name={character_name}
+      />}
+
+      {view === "registries" && <RegistriesView
+        on_select={handle_load_from_registry}
+        on_back={() => setView("campaigns")}
       />}
 
       {view === "lobby" && <LobbyView
@@ -225,9 +259,59 @@ export default function App() {
   );
 }
 
+// ── Registry Picker (Session Zero — select a finalized campaign) ─────────────
+
+function RegistriesView({ on_select, on_back }: any) {
+  const [registries, setRegistries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api_list_registries()
+      .then(setRegistries)
+      .catch((e: any) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div>
+      <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20}}>
+        <h2>Load Campaign</h2>
+        <button onClick={on_back}>← Back</button>
+      </div>
+
+      <div className="card" style={{marginBottom: 20}}>
+        <div className="label">Finalized Campaigns</div>
+        <p style={{color: "var(--text-dim)", margin: "8px 0 12px"}}>
+          Select a campaign whose Session Zero is complete. State is loaded into memory and the DM can begin.
+        </p>
+      </div>
+
+      {loading && <p style={{color: "var(--text-dim)"}}>Loading...</p>}
+      {error && <p style={{color: "var(--accent)"}}>{error}</p>}
+      {!loading && registries.length === 0 && (
+        <p style={{color: "var(--text-dim)"}}>No finalized campaigns found. Complete Session Zero in dnd-core first.</p>
+      )}
+      {registries.map((reg: any) => (
+        <div key={reg.campaign_id} className="card">
+          <div style={{display: "flex", justifyContent: "space-between", alignItems: "center"}}>
+            <div>
+              <strong>{reg.campaign_id}</strong>
+              <div style={{fontSize: 12, color: "var(--text-dim)", marginTop: 4}}>
+                {reg.characters?.length ?? 0} characters · finalized {reg.session_zero_finalized_at ? new Date(reg.session_zero_finalized_at).toLocaleDateString() : "?"}
+              </div>
+            </div>
+            <button onClick={() => on_select(reg.campaign_id)}>Load</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Campaign List ──────────────────────────────────────────────────────────────
 
-function CampaignsView({ campaigns, new_title, setNew_title, on_create, on_join, dm_token, character_token, character_name }: any) {
+function CampaignsView({ campaigns, new_title, setNew_title, on_create, on_join, on_browse_registries, dm_token, character_token, character_name }: any) {
   return (
     <div>
       <h2 style={{marginBottom: 20}}> Campaigns</h2>
@@ -241,7 +325,12 @@ function CampaignsView({ campaigns, new_title, setNew_title, on_create, on_join,
         </div>
       </div>
 
-      <h3 style={{margin: "20px 0 10px"}}>Active Campaigns</h3>
+      <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 0 10px"}}>
+        <h3 style={{margin: 0}}>Active Campaigns</h3>
+        <button onClick={on_browse_registries} style={{background: "var(--surface2)", fontSize: 13}}>
+          Load from Registry →
+        </button>
+      </div>
       {campaigns.length === 0 && <p style={{color: "var(--text-dim)"}}>No campaigns yet.</p>}
       {campaigns.map((c: Campaign) => (
         <div key={c.id} className="card">

@@ -5,6 +5,7 @@ from api.sessions import router as sessions_router
 from api.characters import router as characters_router
 from api.messages import router as messages_router
 from api.registries import router as registries_router
+from api.session_zero import router as session_zero_router
 
 __all__ = [
     "campaigns_router",
@@ -12,4 +13,5 @@ __all__ = [
     "characters_router",
     "messages_router",
     "registries_router",
+    "session_zero_router",
 ]
