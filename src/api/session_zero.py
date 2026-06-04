@@ -197,7 +197,7 @@ def join_campaign(campaign_id: str, body: JoinRequest):
 
     # Track status internally (not in Character model — extend via campaign metadata)
     # Store pending status in campaign.pending_characters dict
-    pending = getattr(campaign, '_pending_characters', {})
+    pending = getattr(campaign, 'pending_characters', {})
     pending[body.name] = CharacterStatus.PENDING
     campaign.pending_characters = pending
 
@@ -280,7 +280,7 @@ def update_character_status(
     if character_name not in campaign.characters:
         raise HTTPException(status_code=404, detail="Character not found")
 
-    pending = getattr(campaign, '_pending_characters', {})
+    pending = getattr(campaign, 'pending_characters', {})
     pending[character_name] = CharacterStatus.APPROVED if status == "approved" else CharacterStatus.REJECTED
     campaign.pending_characters = pending
     repo.save_campaign(campaign)
@@ -392,7 +392,7 @@ def get_session_zero_status(campaign_id: str):
     if isinstance(current_phase, str):
         current_phase = CampaignPhase(current_phase)
 
-    pending = getattr(campaign, '_pending_characters', {})
+    pending = getattr(campaign, 'pending_characters', {})
     characters = [
         {
             "name": ch.name,
